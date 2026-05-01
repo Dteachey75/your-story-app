@@ -352,42 +352,66 @@ const StoryApp = () => {
           <form onSubmit={handleSaveStory} className="space-y-6">
             <div className="bg-white rounded-xl p-6 border border-amber-100">
               <label className="block text-sm font-semibold text-gray-700 mb-2">Story Theme or Title</label>
+              <p className="text-xs text-gray-600 mb-3">What is the central theme? (e.g., "Finding Trust During Loss", "God's Provision in My Childhood")</p>
               <input type="text" value={formData.theme} onChange={(e) => handleFormChange('theme', e.target.value)} placeholder="Enter your story theme..." className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-base" />
             </div>
 
             <div className="bg-white rounded-xl p-6 border border-amber-100">
               <label className="block text-sm font-semibold text-gray-700 mb-2">Age Range</label>
+              <p className="text-xs text-gray-600 mb-3">When did this story take place? (e.g., "Ages 8-12")</p>
               <input type="text" value={formData.ageRange} onChange={(e) => handleFormChange('ageRange', e.target.value)} placeholder="e.g., Ages 8-12" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-base" />
             </div>
 
-            <div className="bg-white rounded-xl p-6 border border-amber-100">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">What made this theme significant?</label>
-              <textarea value={formData.themeDescription} onChange={(e) => handleFormChange('themeDescription', e.target.value)} placeholder="Describe what made this theme important..." rows="4" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+            <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-6 border border-amber-200">
+              <h3 className="font-serif text-lg text-amber-900 mb-4">🌱 CREATION - Life & Beauty</h3>
+              
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">What made this theme significant?</label>
+                <p className="text-xs text-gray-600 mb-3">When was the last time you felt all was right with the world? What about this theme made you feel free, peaceful, or at home? What did you enjoy doing and with whom? Think about surrounding events, sights and smells.</p>
+                <textarea value={formData.themeDescription} onChange={(e) => handleFormChange('themeDescription', e.target.value)} placeholder="Describe the beauty, peace, joy, or harmony you experienced..." rows="4" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              </div>
             </div>
 
-            <div className="bg-white rounded-xl p-6 border border-amber-100">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Your Life Before</label>
-              <textarea value={formData.lifeBefore} onChange={(e) => handleFormChange('lifeBefore', e.target.value)} placeholder="What was most important to you?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+            <div className="bg-gradient-to-br from-red-50 to-orange-50 rounded-xl p-6 border border-red-200">
+              <h3 className="font-serif text-lg text-red-900 mb-4">💔 FALL - Loss & Brokenness</h3>
+              
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Your Life Before - The Shattering</label>
+                <p className="text-xs text-gray-600 mb-3">What was most important to you? Where did you find security, identity, or happiness? When did you first notice brokenness in this area? How did you respond? What did you do to try to fix it, hide from it, or blame others?</p>
+                <textarea value={formData.lifeBefore} onChange={(e) => handleFormChange('lifeBefore', e.target.value)} placeholder="What was your life like before the brokenness? What were you seeking? How did you respond?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              </div>
             </div>
 
-            <div className="bg-white rounded-xl p-6 border border-amber-100">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">How Christ Met You in This</label>
-              <textarea value={formData.christEntered} onChange={(e) => handleFormChange('christEntered', e.target.value)} placeholder="How did Christ rescue or redeem you?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+            <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-6 border border-green-200">
+              <h3 className="font-serif text-lg text-green-900 mb-4">✝️ REDEMPTION - Love & Liberty</h3>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">How Christ Met You in This</label>
+                <p className="text-xs text-gray-600 mb-3">Where were you waiting for rescue? How did Christ show up and save you—not just eternally, but right here and now? What does this reveal about sin, grace, and God's character? Is there a Bible story, character, or Psalm that reminds you of your story?</p>
+                <textarea value={formData.christEntered} onChange={(e) => handleFormChange('christEntered', e.target.value)} placeholder="How did Christ rescue or redeem you? What changed? What did you learn about His love?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Changes Christ Has Made</label>
+                <p className="text-xs text-gray-600 mb-3">How has your relationship with Christ impacted your character, attitudes, or decisions? What parts of your "glory self" are emerging? What motivates you now? Include people, places, or Scripture that have shaped you.</p>
+                <textarea value={formData.changes} onChange={(e) => handleFormChange('changes', e.target.value)} placeholder="How are you different? What has healed? What has been restored?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              </div>
             </div>
 
-            <div className="bg-white rounded-xl p-6 border border-amber-100">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Changes Christ Has Made</label>
-              <textarea value={formData.changes} onChange={(e) => handleFormChange('changes', e.target.value)} placeholder="How has Christ changed you?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
-            </div>
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
+              <h3 className="font-serif text-lg text-blue-900 mb-4">👑 CONSUMMATION - Life & Glory</h3>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Your Present Reality</label>
+                <p className="text-xs text-gray-600 mb-3">Where do you see the Lord working in your heart now? What struggles or idols remain? Where are you longing for full restoration? What does hope look like for you in this current chapter? How might knowing your secured future in God impact your present uncertainty?</p>
+                <textarea value={formData.presentReality} onChange={(e) => handleFormChange('presentReality', e.target.value)} placeholder="What joys and challenges are you experiencing now? Where is Christ still working? What promises of His character do you hope to see become more real?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              </div>
 
-            <div className="bg-white rounded-xl p-6 border border-amber-100">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Your Present Reality</label>
-              <textarea value={formData.presentReality} onChange={(e) => handleFormChange('presentReality', e.target.value)} placeholder="Where is God working now?" rows="5" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
-            </div>
-
-            <div className="bg-white rounded-xl p-6 border border-amber-100">
-              <label className="block text-sm font-semibold text-gray-700 mb-2">Concluding Statement</label>
-              <textarea value={formData.conclusion} onChange={(e) => handleFormChange('conclusion', e.target.value)} placeholder="Summarize your story..." rows="4" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Concluding Statement</label>
+                <p className="text-xs text-gray-600 mb-3">What does this story reveal about God's character? What glimpses of your fully redeemed glory-self do you catch? How does this story connect to God's larger story of grace?</p>
+                <textarea value={formData.conclusion} onChange={(e) => handleFormChange('conclusion', e.target.value)} placeholder="Summarize your story and connect it back to your theme. What have you learned about God?" rows="4" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 resize-none text-base" />
+              </div>
             </div>
 
             <div className="flex flex-col sm:flex-row gap-3">
@@ -402,13 +426,13 @@ const StoryApp = () => {
           </form>
 
           <div className="mt-8 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
-            <h3 className="font-serif text-lg text-gray-800 mb-3">💡 As You Write</h3>
+            <h3 className="font-serif text-lg text-gray-800 mb-3">💡 Reflection Tips</h3>
             <ul className="text-sm text-gray-700 space-y-2">
-              <li>✓ Write what comes to mind</li>
-              <li>✓ Include sensory details</li>
-              <li>✓ Be honest about struggles</li>
-              <li>✓ Look for God's presence</li>
-              <li>✓ Remember: God is the hero</li>
+              <li>✓ Do you think in forests (big themes) or trees (specific moments)? Choose what feels natural</li>
+              <li>✓ Include sensory details—sights, sounds, smells, textures bring stories to life</li>
+              <li>✓ Be honest about struggles, hiding, and blame—God's grace covers it all</li>
+              <li>✓ Look for God even when He seemed hidden—He was there</li>
+              <li>✓ Remember: God is the hero of your story, not you</li>
             </ul>
           </div>
         </div>
