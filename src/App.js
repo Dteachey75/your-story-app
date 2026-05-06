@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
-import { Eye, EyeOff, Plus, Edit2, Trash2, Save, X, LogOut } from 'lucide-react';
+import { Eye, EyeOff, Plus, Edit2, Trash2, Save, X, LogOut, Mail, FileText } from 'lucide-react';
+import html2pdf from 'html2pdf.js';
 
 const LoginForm = ({ onSubmit, isLoading }) => {
   const [email, setEmail] = useState('');
@@ -241,6 +242,100 @@ const StoryApp = () => {
     return stories[currentUser] || [];
   }, [stories, currentUser]);
 
+  const formatStoryContent = (story) => {
+    return `STORY: ${story.theme}
+
+AGE RANGE: ${story.ageRange || 'Not specified'}
+
+---
+
+CREATION - Life & Beauty:
+${story.themeDescription}
+
+---
+
+FALL - Loss & Brokenness:
+${story.lifeBefore}
+
+---
+
+REDEMPTION - Love & Liberty:
+
+How Christ Met Me:
+${story.christEntered}
+
+Changes Christ Has Made:
+${story.changes}
+
+---
+
+CONSUMMATION - Life & Glory:
+
+My Present Reality:
+${story.presentReality}
+
+---
+
+CONCLUSION:
+${story.conclusion}
+
+---
+Created: ${new Date(story.createdAt).toLocaleDateString()}
+Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
+  };
+
+  const exportToPDF = useCallback((story) => {
+    const element = document.createElement('div');
+    element.innerHTML = `
+      <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+        <h1 style="color: #92400e; border-bottom: 3px solid #f59e0b; padding-bottom: 10px;">${story.theme}</h1>
+        <p style="color: #666; font-style: italic;">Ages: ${story.ageRange || 'Not specified'}</p>
+        
+        <h2 style="color: #b45309; margin-top: 20px;">🌱 CREATION - Life & Beauty</h2>
+        <p>${story.themeDescription.replace(/\n/g, '<br>')}</p>
+        
+        <h2 style="color: #b45309; margin-top: 20px;">💔 FALL - Loss & Brokenness</h2>
+        <p>${story.lifeBefore.replace(/\n/g, '<br>')}</p>
+        
+        <h2 style="color: #b45309; margin-top: 20px;">✝️ REDEMPTION - Love & Liberty</h2>
+        <h3 style="color: #666; margin-top: 10px;">How Christ Met Me:</h3>
+        <p>${story.christEntered.replace(/\n/g, '<br>')}</p>
+        <h3 style="color: #666; margin-top: 10px;">Changes Christ Has Made:</h3>
+        <p>${story.changes.replace(/\n/g, '<br>')}</p>
+        
+        <h2 style="color: #b45309; margin-top: 20px;">👑 CONSUMMATION - Life & Glory</h2>
+        <h3 style="color: #666; margin-top: 10px;">My Present Reality:</h3>
+        <p>${story.presentReality.replace(/\n/g, '<br>')}</p>
+        <h3 style="color: #666; margin-top: 10px;">Conclusion:</h3>
+        <p>${story.conclusion.replace(/\n/g, '<br>')}</p>
+        
+        <hr style="margin-top: 30px; border: none; border-top: 1px solid #ccc;">
+        <p style="font-size: 12px; color: #999; margin-top: 20px;">
+          Created: ${new Date(story.createdAt).toLocaleDateString()}<br>
+          Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}<br>
+          Captured in Your Story Matters
+        </p>
+      </div>
+    `;
+
+    const opt = {
+      margin: 10,
+      filename: `${story.theme.replace(/\s+/g, '-')}.pdf`,
+      image: { type: 'jpeg', quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
+    };
+
+    html2pdf().set(opt).from(element).save();
+  }, []);
+
+  const sendViaEmail = useCallback((story) => {
+    const subject = `My Story: ${story.theme}`;
+    const body = formatStoryContent(story);
+    const mailtoLink = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailtoLink;
+  }, []);
+
   if (authState === 'login') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 flex items-center justify-center p-4">
@@ -319,15 +414,27 @@ const StoryApp = () => {
                   {story.ageRange && <p className="text-sm text-gray-600 mb-4">Ages {story.ageRange}</p>}
                   <p className="text-gray-600 text-sm mb-4 line-clamp-3">{story.themeDescription}</p>
                   <div className="text-xs text-gray-500 mb-4">Last updated: {new Date(story.updatedAt).toLocaleDateString()}</div>
-                  <div className="flex gap-2">
-                    <button onClick={() => handleEditStory(story.id)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition text-sm">
-                      <Edit2 size={16} />
-                      Edit
-                    </button>
-                    <button onClick={() => handleDeleteStory(story.id)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition text-sm">
-                      <Trash2 size={16} />
-                      Delete
-                    </button>
+                  <div className="flex flex-col gap-2">
+                    <div className="flex gap-2">
+                      <button onClick={() => handleEditStory(story.id)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition text-sm">
+                        <Edit2 size={16} />
+                        Edit
+                      </button>
+                      <button onClick={() => handleDeleteStory(story.id)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition text-sm">
+                        <Trash2 size={16} />
+                        Delete
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => exportToPDF(story)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 transition text-sm">
+                        <FileText size={16} />
+                        PDF
+                      </button>
+                      <button onClick={() => sendViaEmail(story)} className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition text-sm">
+                        <Mail size={16} />
+                        Email
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -358,8 +465,8 @@ const StoryApp = () => {
 
             <div className="bg-white rounded-xl p-6 border border-amber-100">
               <label className="block text-sm font-semibold text-gray-700 mb-2">Age Range</label>
-              <p className="text-xs text-gray-600 mb-3">When did this story take place? (e.g., "Ages 8-12")</p>
-              <input type="text" value={formData.ageRange} onChange={(e) => handleFormChange('ageRange', e.target.value)} placeholder="e.g., Ages 8-12" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-base" />
+              <p className="text-xs text-gray-600 mb-3">When did this story take place? (e.g., "Ages 8-12" or "my whole life")</p>
+              <input type="text" value={formData.ageRange} onChange={(e) => handleFormChange('ageRange', e.target.value)} placeholder="e.g., Ages 8-12 or my whole life" className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-base" />
             </div>
 
             <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl p-6 border border-amber-200">
