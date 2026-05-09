@@ -9,7 +9,12 @@ const { pool, migrate } = require('./db');
 const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL;
+const ADMIN_EMAILS = (process.env.ADMIN_EMAIL || '')
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
 const BCRYPT_COST = 12;
+const VALID_ROLES = new Set(['user', 'admin']);
 
 if (!JWT_SECRET || JWT_SECRET.length < 32) {
   console.error('JWT_SECRET env var is required and must be at least 32 characters');
@@ -60,7 +65,8 @@ const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 320;
 const isValidPassword = (pw) => typeof pw === 'string' && pw.length >= 8 && pw.length <= 1024;
 
-const signToken = (userId) => jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '7d' });
+const signToken = (userId, role) =>
+  jwt.sign({ uid: userId, role: role || 'user' }, JWT_SECRET, { expiresIn: '7d' });
 
 function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
@@ -69,9 +75,23 @@ function authMiddleware(req, res, next) {
   try {
     const payload = jwt.verify(token, JWT_SECRET);
     req.userId = payload.uid;
+    req.tokenRole = payload.role || 'user';
     next();
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
+  }
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const result = await pool.query('SELECT role FROM users WHERE id = $1', [req.userId]);
+    if (result.rows.length === 0 || result.rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    next();
+  } catch (err) {
+    console.error('admin check error:', err.message);
+    res.status(500).json({ error: 'Server error' });
   }
 }
 
@@ -87,23 +107,25 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
   let client;
   try {
     const hash = await bcrypt.hash(password, BCRYPT_COST);
+    const role = ADMIN_EMAILS.includes(email) ? 'admin' : 'user';
     client = await pool.connect();
     await client.query('BEGIN');
     const userResult = await client.query(
-      'INSERT INTO users (email, password_hash) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING RETURNING id',
-      [email, hash]
+      'INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3) ON CONFLICT (email) DO NOTHING RETURNING id, role',
+      [email, hash, role]
     );
     if (userResult.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(409).json({ error: 'Email already registered' });
     }
     const userId = userResult.rows[0].id;
+    const userRole = userResult.rows[0].role;
     await client.query(
       'INSERT INTO vaults (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING',
       [userId]
     );
     await client.query('COMMIT');
-    res.status(201).json({ token: signToken(userId), email });
+    res.status(201).json({ token: signToken(userId, userRole), email, role: userRole });
   } catch (err) {
     if (client) {
       try { await client.query('ROLLBACK'); } catch {}
@@ -123,7 +145,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   }
   try {
     const result = await pool.query(
-      'SELECT id, email, password_hash FROM users WHERE LOWER(email) = $1',
+      'SELECT id, email, password_hash, role FROM users WHERE LOWER(email) = $1',
       [email]
     );
     if (result.rows.length === 0) {
@@ -133,7 +155,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     const row = result.rows[0];
     const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
-    res.json({ token: signToken(row.id), email: row.email });
+    res.json({ token: signToken(row.id, row.role), email: row.email, role: row.role });
   } catch (err) {
     console.error('login error:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -142,11 +164,70 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 
 app.get('/api/me', apiLimiter, authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query('SELECT email FROM users WHERE id = $1', [req.userId]);
+    const result = await pool.query('SELECT email, role FROM users WHERE id = $1', [req.userId]);
     if (result.rows.length === 0) return res.status(401).json({ error: 'Unauthorized' });
-    res.json({ email: result.rows[0].email });
+    res.json({ email: result.rows[0].email, role: result.rows[0].role });
   } catch (err) {
     console.error('me error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/admin/users', apiLimiter, authMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT u.id, u.email, u.role, u.created_at,
+             COALESCE(jsonb_array_length(v.data), 0) AS story_count
+      FROM users u
+      LEFT JOIN vaults v ON v.user_id = u.id
+      ORDER BY u.created_at DESC
+    `);
+    res.json(result.rows.map((r) => ({
+      id: r.id,
+      email: r.email,
+      role: r.role,
+      createdAt: r.created_at,
+      storyCount: Number(r.story_count) || 0,
+    })));
+  } catch (err) {
+    console.error('admin list users error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.patch('/api/admin/users/:id/role', apiLimiter, authMiddleware, requireAdmin, async (req, res) => {
+  const targetId = req.params.id;
+  const newRole = req.body?.role;
+  if (!VALID_ROLES.has(newRole)) {
+    return res.status(400).json({ error: 'Invalid role' });
+  }
+  if (targetId === req.userId) {
+    return res.status(400).json({ error: 'You cannot change your own role' });
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE users SET role = $1 WHERE id = $2 RETURNING id',
+      [newRole, targetId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('admin role update error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.delete('/api/admin/users/:id', apiLimiter, authMiddleware, requireAdmin, async (req, res) => {
+  const targetId = req.params.id;
+  if (targetId === req.userId) {
+    return res.status(400).json({ error: 'You cannot delete your own account from the admin panel; use Delete account instead' });
+  }
+  try {
+    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id', [targetId]);
+    if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('admin delete user error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -206,10 +287,24 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Server error' });
 });
 
+async function bootstrapAdmins() {
+  if (ADMIN_EMAILS.length === 0) return;
+  const result = await pool.query(
+    `UPDATE users SET role = 'admin'
+     WHERE LOWER(email) = ANY($1::text[]) AND role <> 'admin'
+     RETURNING email`,
+    [ADMIN_EMAILS]
+  );
+  if (result.rows.length > 0) {
+    console.log('Promoted to admin:', result.rows.map((r) => r.email).join(', '));
+  }
+}
+
 (async () => {
   try {
     await migrate();
     console.log('Migrations applied');
+    await bootstrapAdmins();
     app.listen(PORT, () => console.log(`API listening on :${PORT}`));
   } catch (err) {
     console.error('Startup failed:', err);

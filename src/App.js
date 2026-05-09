@@ -1,7 +1,10 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Eye, EyeOff, Plus, Edit2, Trash2, Save, X, LogOut, Mail, FileText } from 'lucide-react';
+import { Eye, EyeOff, Plus, Edit2, Trash2, Save, X, LogOut, Mail, FileText, Shield, Download, ArrowLeft } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
 import { api, setSession, clearSession, hasToken, getStoredEmail } from './api';
+
+const LEGACY_STORIES_KEY = 'storyAppStories';
+const LEGACY_USERS_KEY = 'storyAppUsers';
 
 const escapeHTML = (s) =>
   String(s ?? '')
@@ -171,10 +174,15 @@ const StoryApp = () => {
   const [authMode, setAuthMode] = useState('signin');
   const [isLoading, setIsLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [userRole, setUserRole] = useState('user');
   const [stories, setStories] = useState([]);
   const [editingStoryId, setEditingStoryId] = useState(null);
   const [formData, setFormData] = useState(emptyForm());
   const [modal, setModal] = useState(null);
+  const [legacyImportCount, setLegacyImportCount] = useState(0);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState(null);
 
   useEffect(() => {
     if (!hasToken()) return;
@@ -185,9 +193,10 @@ const StoryApp = () => {
       return;
     }
     setIsLoading(true);
-    api.getVault()
-      .then((loaded) => {
-        setCurrentUser(storedEmail);
+    Promise.all([api.me(), api.getVault()])
+      .then(([me, loaded]) => {
+        setCurrentUser(me.email);
+        setUserRole(me.role || 'user');
         setStories(Array.isArray(loaded) ? loaded : []);
         setAuthState('dashboard');
       })
@@ -198,13 +207,38 @@ const StoryApp = () => {
       .finally(() => setIsLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setLegacyImportCount(0);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(LEGACY_STORIES_KEY);
+      if (!raw) return;
+      const map = JSON.parse(raw);
+      const userStories = map && map[currentUser];
+      if (Array.isArray(userStories)) setLegacyImportCount(userStories.length);
+    } catch {}
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (authState !== 'admin') return;
+    setAdminLoading(true);
+    setAdminError(null);
+    api.adminListUsers()
+      .then((rows) => setAdminUsers(rows))
+      .catch((err) => setAdminError(err.message || 'Failed to load users'))
+      .finally(() => setAdminLoading(false));
+  }, [authState]);
+
   const handleSigninSubmit = useCallback(async (email, password) => {
     setIsLoading(true);
     try {
-      const { token, email: serverEmail } = await api.login({ email, password });
-      setSession(token, serverEmail);
+      const { token, email: serverEmail, role } = await api.login({ email, password });
+      setSession(token, serverEmail, role || 'user');
       const loaded = await api.getVault();
       setCurrentUser(serverEmail);
+      setUserRole(role || 'user');
       setStories(Array.isArray(loaded) ? loaded : []);
       setAuthState('dashboard');
       return null;
@@ -219,9 +253,10 @@ const StoryApp = () => {
   const handleSignupSubmit = useCallback(async (email, password) => {
     setIsLoading(true);
     try {
-      const { token, email: serverEmail } = await api.signup({ email, password });
-      setSession(token, serverEmail);
+      const { token, email: serverEmail, role } = await api.signup({ email, password });
+      setSession(token, serverEmail, role || 'user');
       setCurrentUser(serverEmail);
+      setUserRole(role || 'user');
       setStories([]);
       setAuthState('dashboard');
       return null;
@@ -236,12 +271,110 @@ const StoryApp = () => {
   const handleLogout = useCallback(() => {
     clearSession();
     setCurrentUser(null);
+    setUserRole('user');
     setStories([]);
     setEditingStoryId(null);
     setFormData(emptyForm());
+    setAdminUsers([]);
     setAuthState('login');
     setAuthMode('signin');
   }, []);
+
+  const handleImportLegacy = useCallback(() => {
+    setModal({
+      title: `Import ${legacyImportCount} stor${legacyImportCount === 1 ? 'y' : 'ies'} from this browser?`,
+      body: 'These were saved in an earlier version of the app. They will be added to your account. The local copies will be removed afterward.',
+      confirmLabel: 'Import',
+      onConfirm: async () => {
+        try {
+          const raw = localStorage.getItem(LEGACY_STORIES_KEY);
+          const map = raw ? JSON.parse(raw) : {};
+          const userStories = Array.isArray(map[currentUser]) ? map[currentUser] : [];
+          if (userStories.length === 0) {
+            setLegacyImportCount(0);
+            setModal(null);
+            return;
+          }
+          const existingIds = new Set(stories.map((s) => s.id));
+          const normalized = userStories
+            .filter((s) => s && typeof s === 'object')
+            .map((s) => ({
+              ...emptyForm(),
+              ...s,
+              id: existingIds.has(s.id) ? newStoryId() : (s.id || newStoryId()),
+              createdAt: s.createdAt || new Date().toISOString(),
+              updatedAt: s.updatedAt || new Date().toISOString(),
+            }));
+          const merged = [...stories, ...normalized];
+          await api.putVault(merged);
+          setStories(merged);
+          delete map[currentUser];
+          if (Object.keys(map).length === 0) {
+            localStorage.removeItem(LEGACY_STORIES_KEY);
+            localStorage.removeItem(LEGACY_USERS_KEY);
+          } else {
+            localStorage.setItem(LEGACY_STORIES_KEY, JSON.stringify(map));
+          }
+          setLegacyImportCount(0);
+          setModal({
+            title: 'Imported',
+            body: `${normalized.length} stor${normalized.length === 1 ? 'y' : 'ies'} added to your account.`,
+            onConfirm: () => setModal(null),
+          });
+        } catch (err) {
+          setModal({
+            title: 'Import failed',
+            body: err.message || 'Could not import. Please try again.',
+            onConfirm: () => setModal(null),
+          });
+        }
+      },
+    });
+  }, [legacyImportCount, currentUser, stories]);
+
+  const refreshAdminUsers = useCallback(() => {
+    setAdminLoading(true);
+    setAdminError(null);
+    return api.adminListUsers()
+      .then((rows) => setAdminUsers(rows))
+      .catch((err) => setAdminError(err.message || 'Failed to load users'))
+      .finally(() => setAdminLoading(false));
+  }, []);
+
+  const handleAdminChangeRole = useCallback(async (userId, newRole) => {
+    try {
+      await api.adminUpdateRole(userId, newRole);
+      await refreshAdminUsers();
+    } catch (err) {
+      setModal({
+        title: 'Role update failed',
+        body: err.message || 'Could not update role.',
+        onConfirm: () => setModal(null),
+      });
+    }
+  }, [refreshAdminUsers]);
+
+  const handleAdminDeleteUser = useCallback((user) => {
+    setModal({
+      title: `Delete ${user.email}?`,
+      body: `This permanently deletes the account and all their stories. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+      onConfirm: async () => {
+        try {
+          await api.adminDeleteUser(user.id);
+          await refreshAdminUsers();
+          setModal(null);
+        } catch (err) {
+          setModal({
+            title: 'Delete failed',
+            body: err.message || 'Could not delete user.',
+            onConfirm: () => setModal(null),
+          });
+        }
+      },
+    });
+  }, [refreshAdminUsers]);
 
   const handleDeleteAccount = useCallback(() => {
     setModal({
@@ -512,7 +645,17 @@ Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
                 <h1 className="text-4xl font-serif text-gray-800 mb-1">Welcome Back</h1>
                 <p className="text-gray-600 text-sm">{currentUser}</p>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
+                {userRole === 'admin' && (
+                  <button
+                    onClick={() => setAuthState('admin')}
+                    className="flex items-center gap-2 px-4 py-2 bg-white text-purple-700 rounded-lg border border-purple-200 hover:bg-purple-50 transition text-sm"
+                    title="Open admin panel"
+                  >
+                    <Shield size={18} />
+                    Admin
+                  </button>
+                )}
                 <button
                   onClick={handleDeleteAccount}
                   className="flex items-center gap-2 px-4 py-2 bg-white text-red-700 rounded-lg border border-red-200 hover:bg-red-50 transition text-sm"
@@ -530,6 +673,21 @@ Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
                 </button>
               </div>
             </div>
+
+            {legacyImportCount > 0 && (
+              <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3 flex-wrap">
+                <Download size={18} className="text-blue-700 shrink-0" />
+                <div className="text-sm text-blue-900 flex-1 min-w-0">
+                  Found {legacyImportCount} stor{legacyImportCount === 1 ? 'y' : 'ies'} from a previous version of the app saved in this browser.
+                </div>
+                <button
+                  onClick={handleImportLegacy}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm whitespace-nowrap"
+                >
+                  Import to my account
+                </button>
+              </div>
+            )}
 
             <button
               onClick={handleCreateStory}
@@ -576,6 +734,97 @@ Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (authState === 'admin') {
+    return (
+      <>
+        {modalNode}
+        <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 p-6">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex justify-between items-center mb-8 flex-wrap gap-3">
+              <div className="flex items-center gap-3">
+                <Shield size={28} className="text-purple-700" />
+                <h1 className="text-3xl font-serif text-gray-800">Admin Panel</h1>
+              </div>
+              <button
+                onClick={() => setAuthState('dashboard')}
+                className="flex items-center gap-2 px-4 py-2 bg-white text-gray-700 rounded-lg border border-gray-300 hover:bg-gray-50 transition text-sm"
+              >
+                <ArrowLeft size={18} />
+                Back to Stories
+              </button>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 mb-6">
+              Admins can manage accounts and roles. Story content is never exposed in the admin panel.
+            </div>
+
+            {adminLoading && (
+              <div className="bg-white rounded-2xl border border-amber-100 p-8 text-center text-gray-600 text-sm">Loading users...</div>
+            )}
+
+            {adminError && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm text-red-700 mb-4">{adminError}</div>
+            )}
+
+            {!adminLoading && !adminError && (
+              <div className="bg-white rounded-2xl border border-amber-100 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wide">
+                      <tr>
+                        <th className="text-left px-4 py-3">Email</th>
+                        <th className="text-left px-4 py-3">Role</th>
+                        <th className="text-left px-4 py-3">Stories</th>
+                        <th className="text-left px-4 py-3">Joined</th>
+                        <th className="text-right px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminUsers.map((u) => {
+                        const isSelf = u.email === currentUser;
+                        return (
+                          <tr key={u.id} className="border-t border-gray-100">
+                            <td className="px-4 py-3 text-gray-800">
+                              {u.email}
+                              {isSelf && <span className="ml-2 text-xs text-gray-500">(you)</span>}
+                            </td>
+                            <td className="px-4 py-3">
+                              <select
+                                value={u.role}
+                                disabled={isSelf}
+                                onChange={(e) => handleAdminChangeRole(u.id, e.target.value)}
+                                className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm disabled:bg-gray-100 disabled:text-gray-500"
+                              >
+                                <option value="user">user</option>
+                                <option value="admin">admin</option>
+                              </select>
+                            </td>
+                            <td className="px-4 py-3 text-gray-600">{u.storyCount}</td>
+                            <td className="px-4 py-3 text-gray-600">{new Date(u.createdAt).toLocaleDateString()}</td>
+                            <td className="px-4 py-3 text-right">
+                              <button
+                                onClick={() => handleAdminDeleteUser(u)}
+                                disabled={isSelf}
+                                className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 transition text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                <Trash2 size={14} />
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </div>

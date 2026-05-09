@@ -1,17 +1,19 @@
 const API_URL = (process.env.REACT_APP_API_URL || '').replace(/\/$/, '');
 const TOKEN_KEY = 'storyAppToken';
 const EMAIL_KEY = 'storyAppEmail';
+const ROLE_KEY = 'storyAppRole';
 
 let authToken = null;
 try {
   authToken = localStorage.getItem(TOKEN_KEY);
 } catch {}
 
-export const setSession = (token, email) => {
+export const setSession = (token, email, role) => {
   authToken = token;
   try {
     localStorage.setItem(TOKEN_KEY, token);
     if (email) localStorage.setItem(EMAIL_KEY, email);
+    if (role) localStorage.setItem(ROLE_KEY, role);
   } catch {}
 };
 
@@ -20,11 +22,16 @@ export const clearSession = () => {
   try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(EMAIL_KEY);
+    localStorage.removeItem(ROLE_KEY);
   } catch {}
 };
 
 export const getStoredEmail = () => {
   try { return localStorage.getItem(EMAIL_KEY); } catch { return null; }
+};
+
+export const getStoredRole = () => {
+  try { return localStorage.getItem(ROLE_KEY) || 'user'; } catch { return 'user'; }
 };
 
 export const hasToken = () => Boolean(authToken);
@@ -69,4 +76,9 @@ export const api = {
   putVault: (stories) => request('/api/vault', { method: 'PUT', auth: true, body: stories }),
   deleteAccount: () => request('/api/account', { method: 'DELETE', auth: true }),
   health: () => request('/api/health'),
+  adminListUsers: () => request('/api/admin/users', { auth: true }),
+  adminUpdateRole: (id, role) =>
+    request(`/api/admin/users/${encodeURIComponent(id)}/role`, { method: 'PATCH', auth: true, body: { role } }),
+  adminDeleteUser: (id) =>
+    request(`/api/admin/users/${encodeURIComponent(id)}`, { method: 'DELETE', auth: true }),
 };
