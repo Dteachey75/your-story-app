@@ -1,11 +1,11 @@
 # your-story-app
 
-Story capture app for faith journeys. Stories are end-to-end encrypted on the client (AES-256-GCM, PBKDF2-SHA256 600k) and synced as ciphertext to a Postgres-backed API.
+Story capture app for faith journeys. Email/password auth with bcrypt + JWT, stories saved server-side as JSON.
 
 ## Architecture
 
 - **Frontend** (`/`): Create React App. Requires `REACT_APP_API_URL` pointing at the API.
-- **Backend** (`server/`): Node/Express + Postgres. Auth via bcrypt + JWT. Stores only encrypted vault blobs.
+- **Backend** (`server/`): Node/Express + Postgres. Auth via bcrypt + JWT. Stories stored as JSONB per user.
 - **Deploy**: `render.yaml` provisions the Postgres database and the API service on Render. The static frontend is deployed separately.
 
 ## Local development
@@ -33,6 +33,7 @@ npm start              # serves :3000
 
 ## Security notes
 
-- The server cannot read user stories — it only stores ciphertext + per-user salt/IV.
-- There is no password reset. Lost password = lost data.
-- See commit history for the security review that drove this architecture.
+- Passwords are bcrypt-hashed (cost 12). Auth tokens are JWT (HS256, 7d).
+- CORS allowlist enforced via `FRONTEND_URL`. Auth endpoints are rate-limited.
+- All user input is HTML-escaped before being injected into the PDF export DOM.
+- No password reset is implemented yet.

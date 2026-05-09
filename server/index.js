@@ -10,7 +10,6 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL;
 const BCRYPT_COST = 12;
-const MAX_VAULT_BYTES = 5_000_000;
 
 if (!JWT_SECRET || JWT_SECRET.length < 32) {
   console.error('JWT_SECRET env var is required and must be at least 32 characters');
@@ -61,12 +60,6 @@ const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 320;
 const isValidPassword = (pw) => typeof pw === 'string' && pw.length >= 8 && pw.length <= 1024;
 
-const isValidVault = (v) =>
-  v &&
-  typeof v.salt === 'string' && v.salt.length > 0 && v.salt.length <= 100 &&
-  typeof v.iv === 'string' && v.iv.length > 0 && v.iv.length <= 100 &&
-  typeof v.ct === 'string' && v.ct.length > 0 && v.ct.length <= MAX_VAULT_BYTES;
-
 const signToken = (userId) => jwt.sign({ uid: userId }, JWT_SECRET, { expiresIn: '7d' });
 
 function authMiddleware(req, res, next) {
@@ -87,11 +80,9 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 app.post('/api/auth/signup', authLimiter, async (req, res) => {
   const email = normalizeEmail(req.body?.email);
   const password = req.body?.password;
-  const vault = req.body?.vault;
 
   if (!isValidEmail(email)) return res.status(400).json({ error: 'Invalid email' });
   if (!isValidPassword(password)) return res.status(400).json({ error: 'Password must be 8-1024 characters' });
-  if (!isValidVault(vault)) return res.status(400).json({ error: 'Vault required' });
 
   let client;
   try {
@@ -108,11 +99,11 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
     }
     const userId = userResult.rows[0].id;
     await client.query(
-      'INSERT INTO vaults (user_id, salt, iv, ciphertext) VALUES ($1, $2, $3, $4)',
-      [userId, vault.salt, vault.iv, vault.ct]
+      'INSERT INTO vaults (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING',
+      [userId]
     );
     await client.query('COMMIT');
-    res.status(201).json({ token: signToken(userId) });
+    res.status(201).json({ token: signToken(userId), email });
   } catch (err) {
     if (client) {
       try { await client.query('ROLLBACK'); } catch {}
@@ -132,19 +123,30 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   }
   try {
     const result = await pool.query(
-      'SELECT id, password_hash FROM users WHERE LOWER(email) = $1',
+      'SELECT id, email, password_hash FROM users WHERE LOWER(email) = $1',
       [email]
     );
     if (result.rows.length === 0) {
       await bcrypt.compare(password, PLACEHOLDER_HASH);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
-    const { id, password_hash } = result.rows[0];
-    const ok = await bcrypt.compare(password, password_hash);
+    const row = result.rows[0];
+    const ok = await bcrypt.compare(password, row.password_hash);
     if (!ok) return res.status(401).json({ error: 'Invalid email or password' });
-    res.json({ token: signToken(id) });
+    res.json({ token: signToken(row.id), email: row.email });
   } catch (err) {
     console.error('login error:', err.message);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/me', apiLimiter, authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT email FROM users WHERE id = $1', [req.userId]);
+    if (result.rows.length === 0) return res.status(401).json({ error: 'Unauthorized' });
+    res.json({ email: result.rows[0].email });
+  } catch (err) {
+    console.error('me error:', err.message);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -152,12 +154,12 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
 app.get('/api/vault', apiLimiter, authMiddleware, async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT salt, iv, ciphertext, updated_at FROM vaults WHERE user_id = $1',
+      'SELECT data, updated_at FROM vaults WHERE user_id = $1',
       [req.userId]
     );
-    if (result.rows.length === 0) return res.json(null);
-    const row = result.rows[0];
-    res.json({ salt: row.salt, iv: row.iv, ct: row.ciphertext, updatedAt: row.updated_at });
+    if (result.rows.length === 0) return res.json([]);
+    const data = result.rows[0].data;
+    res.json(Array.isArray(data) ? data : []);
   } catch (err) {
     console.error('vault get error:', err.message);
     res.status(500).json({ error: 'Server error' });
@@ -165,18 +167,19 @@ app.get('/api/vault', apiLimiter, authMiddleware, async (req, res) => {
 });
 
 app.put('/api/vault', apiLimiter, authMiddleware, async (req, res) => {
-  const vault = req.body;
-  if (!isValidVault(vault)) return res.status(400).json({ error: 'salt, iv, ct required as strings' });
+  if (!Array.isArray(req.body)) {
+    return res.status(400).json({ error: 'Body must be a JSON array of stories' });
+  }
+  if (req.body.length > 1000) {
+    return res.status(400).json({ error: 'Too many stories' });
+  }
   try {
     await pool.query(
-      `INSERT INTO vaults (user_id, salt, iv, ciphertext, updated_at)
-       VALUES ($1, $2, $3, $4, NOW())
+      `INSERT INTO vaults (user_id, data, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
        ON CONFLICT (user_id) DO UPDATE
-         SET salt = EXCLUDED.salt,
-             iv = EXCLUDED.iv,
-             ciphertext = EXCLUDED.ciphertext,
-             updated_at = NOW()`,
-      [req.userId, vault.salt, vault.iv, vault.ct]
+         SET data = EXCLUDED.data, updated_at = NOW()`,
+      [req.userId, JSON.stringify(req.body)]
     );
     res.json({ ok: true });
   } catch (err) {

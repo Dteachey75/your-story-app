@@ -1,50 +1,7 @@
-import React, { useState, useCallback } from 'react';
-import { Eye, EyeOff, Plus, Edit2, Trash2, Save, X, LogOut, Mail, FileText, AlertTriangle, ShieldAlert } from 'lucide-react';
+import React, { useState, useCallback, useEffect } from 'react';
+import { Eye, EyeOff, Plus, Edit2, Trash2, Save, X, LogOut, Mail, FileText } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
-import { api, setToken, clearToken } from './api';
-
-const PBKDF2_ITERATIONS = 600000;
-const LEGACY_KEYS = ['storyAppUsers', 'storyAppStories'];
-const LEGACY_VAULT_PREFIX = 'storyAppVault:';
-
-const bufToB64 = (buf) =>
-  btoa(String.fromCharCode(...new Uint8Array(buf)));
-
-const b64ToBuf = (b64) =>
-  Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)).buffer;
-
-const deriveKey = async (password, salt) => {
-  const baseKey = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
-  return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
-    baseKey,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-};
-
-const encryptJSON = async (value, key) => {
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = new TextEncoder().encode(JSON.stringify(value));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
-  return { iv: bufToB64(iv.buffer), ct: bufToB64(ct) };
-};
-
-const decryptJSON = async ({ iv, ct }, key) => {
-  const buf = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: b64ToBuf(iv) },
-    key,
-    b64ToBuf(ct)
-  );
-  return JSON.parse(new TextDecoder().decode(buf));
-};
+import { api, setSession, clearSession, hasToken, getStoredEmail } from './api';
 
 const escapeHTML = (s) =>
   String(s ?? '')
@@ -63,7 +20,9 @@ const safeFilename = (s) =>
     .slice(0, 80) || 'story');
 
 const newStoryId = () =>
-  (crypto.randomUUID ? crypto.randomUUID() : `story_${Date.now()}_${crypto.getRandomValues(new Uint32Array(1))[0]}`);
+  (crypto.randomUUID
+    ? crypto.randomUUID()
+    : `story_${Date.now()}_${crypto.getRandomValues(new Uint32Array(1))[0]}`);
 
 const emptyForm = () => ({
   id: null,
@@ -104,8 +63,8 @@ const Modal = ({ open, title, children, onCancel, onConfirm, confirmLabel = 'OK'
   );
 };
 
-const AuthForm = ({ mode, onSubmit, isLoading }) => {
-  const [email, setEmail] = useState('');
+const AuthForm = ({ mode, onSubmit, isLoading, defaultEmail = '' }) => {
+  const [email, setEmail] = useState(defaultEmail);
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -207,65 +166,50 @@ const AuthForm = ({ mode, onSubmit, isLoading }) => {
   );
 };
 
-const detectLegacyData = () => {
-  if (LEGACY_KEYS.some((k) => localStorage.getItem(k) !== null)) return true;
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.startsWith(LEGACY_VAULT_PREFIX)) return true;
-  }
-  return false;
-};
-
-const eraseAllLegacyData = () => {
-  LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
-  const toRemove = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const k = localStorage.key(i);
-    if (k && k.startsWith(LEGACY_VAULT_PREFIX)) toRemove.push(k);
-  }
-  toRemove.forEach((k) => localStorage.removeItem(k));
-};
-
 const StoryApp = () => {
-  const [authState, setAuthState] = useState('login');
+  const [authState, setAuthState] = useState(hasToken() ? 'loading' : 'login');
   const [authMode, setAuthMode] = useState('signin');
   const [isLoading, setIsLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
-  const [vaultKey, setVaultKey] = useState(null);
-  const [vaultSalt, setVaultSalt] = useState(null);
   const [stories, setStories] = useState([]);
   const [editingStoryId, setEditingStoryId] = useState(null);
   const [formData, setFormData] = useState(emptyForm());
   const [modal, setModal] = useState(null);
-  const [hasLegacyData, setHasLegacyData] = useState(detectLegacyData);
+
+  useEffect(() => {
+    if (!hasToken()) return;
+    const storedEmail = getStoredEmail();
+    if (!storedEmail) {
+      clearSession();
+      setAuthState('login');
+      return;
+    }
+    setIsLoading(true);
+    api.getVault()
+      .then((loaded) => {
+        setCurrentUser(storedEmail);
+        setStories(Array.isArray(loaded) ? loaded : []);
+        setAuthState('dashboard');
+      })
+      .catch((err) => {
+        if (err.status === 401) clearSession();
+        setAuthState('login');
+      })
+      .finally(() => setIsLoading(false));
+  }, []);
 
   const handleSigninSubmit = useCallback(async (email, password) => {
     setIsLoading(true);
     try {
-      const { token } = await api.login({ email, password });
-      setToken(token);
-      const vault = await api.getVault();
-      if (!vault) {
-        clearToken();
-        return { error: 'No vault found for this account.' };
-      }
-      const salt = b64ToBuf(vault.salt);
-      const key = await deriveKey(password, salt);
-      let loaded;
-      try {
-        loaded = await decryptJSON({ iv: vault.iv, ct: vault.ct }, key);
-      } catch {
-        clearToken();
-        return { error: 'Could not decrypt your vault. Wrong password?' };
-      }
-      setVaultKey(key);
-      setVaultSalt(salt);
-      setCurrentUser(email);
+      const { token, email: serverEmail } = await api.login({ email, password });
+      setSession(token, serverEmail);
+      const loaded = await api.getVault();
+      setCurrentUser(serverEmail);
       setStories(Array.isArray(loaded) ? loaded : []);
       setAuthState('dashboard');
       return null;
     } catch (err) {
-      clearToken();
+      clearSession();
       return { error: err.message || 'Sign in failed' };
     } finally {
       setIsLoading(false);
@@ -275,38 +219,22 @@ const StoryApp = () => {
   const handleSignupSubmit = useCallback(async (email, password) => {
     setIsLoading(true);
     try {
-      const saltBytes = crypto.getRandomValues(new Uint8Array(16));
-      const key = await deriveKey(password, saltBytes.buffer);
-      const enc = await encryptJSON([], key);
-      const { token } = await api.signup({
-        email,
-        password,
-        vault: { salt: bufToB64(saltBytes.buffer), iv: enc.iv, ct: enc.ct },
-      });
-      setToken(token);
-      setVaultKey(key);
-      setVaultSalt(saltBytes.buffer);
-      setCurrentUser(email);
+      const { token, email: serverEmail } = await api.signup({ email, password });
+      setSession(token, serverEmail);
+      setCurrentUser(serverEmail);
       setStories([]);
       setAuthState('dashboard');
       return null;
     } catch (err) {
-      clearToken();
+      clearSession();
       return { error: err.message || 'Sign up failed' };
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  const persistVault = useCallback(async (newStories) => {
-    const enc = await encryptJSON(newStories, vaultKey);
-    await api.putVault({ salt: bufToB64(vaultSalt), iv: enc.iv, ct: enc.ct });
-  }, [vaultKey, vaultSalt]);
-
   const handleLogout = useCallback(() => {
-    clearToken();
-    setVaultKey(null);
-    setVaultSalt(null);
+    clearSession();
     setCurrentUser(null);
     setStories([]);
     setEditingStoryId(null);
@@ -315,32 +243,14 @@ const StoryApp = () => {
     setAuthMode('signin');
   }, []);
 
-  const eraseLegacyData = useCallback(() => {
-    setModal({
-      title: 'Erase legacy local data?',
-      body:
-        'This browser still has data from a previous version (before stories were stored on the server). It may be unencrypted. Erase it now? This cannot be undone.',
-      confirmLabel: 'Erase',
-      destructive: true,
-      onConfirm: () => {
-        eraseAllLegacyData();
-        setHasLegacyData(false);
-        setModal(null);
-      },
-    });
-  }, []);
-
-  const handleForgetMe = useCallback(() => {
+  const handleDeleteAccount = useCallback(() => {
     setModal({
       title: 'Delete your account?',
-      body:
-        'This permanently deletes your account and all encrypted stories from the server. There is no recovery.',
+      body: 'This permanently deletes your account and all your stories from the server. This cannot be undone.',
       confirmLabel: 'Delete account',
       destructive: true,
       onConfirm: async () => {
-        try {
-          await api.deleteAccount();
-        } catch {}
+        try { await api.deleteAccount(); } catch {}
         setModal(null);
         handleLogout();
       },
@@ -375,7 +285,7 @@ const StoryApp = () => {
         onConfirm: async () => {
           const updated = stories.filter((s) => s.id !== storyId);
           try {
-            await persistVault(updated);
+            await api.putVault(updated);
             setStories(updated);
             setModal(null);
           } catch (err) {
@@ -388,7 +298,7 @@ const StoryApp = () => {
         },
       });
     },
-    [stories, persistVault]
+    [stories]
   );
 
   const handleSaveStory = useCallback(
@@ -414,7 +324,7 @@ const StoryApp = () => {
         ? stories.map((s) => (s.id === storyId ? storyToSave : s))
         : [...stories, storyToSave];
       try {
-        await persistVault(updated);
+        await api.putVault(updated);
         setStories(updated);
         setAuthState('dashboard');
       } catch (err) {
@@ -425,7 +335,7 @@ const StoryApp = () => {
         });
       }
     },
-    [editingStoryId, formData, stories, persistVault]
+    [editingStoryId, formData, stories]
   );
 
   const handleFormChange = useCallback((field, value) => {
@@ -536,6 +446,14 @@ Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
     </Modal>
   );
 
+  if (authState === 'loading') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-amber-50 via-orange-50 to-rose-50 flex items-center justify-center p-4">
+        <div className="text-gray-600 text-sm">Loading your stories...</div>
+      </div>
+    );
+  }
+
   if (authState === 'login') {
     return (
       <>
@@ -574,30 +492,8 @@ Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
                 mode={authMode}
                 onSubmit={authMode === 'signup' ? handleSignupSubmit : handleSigninSubmit}
                 isLoading={isLoading}
+                defaultEmail={getStoredEmail() || ''}
               />
-
-              <div className="mt-6 pt-6 border-t border-gray-200 space-y-3">
-                <p className="text-xs text-gray-600">
-                  Your stories are encrypted on your device with a key derived from your password (AES-256-GCM, PBKDF2-SHA256 600k). The server stores only encrypted ciphertext.
-                </p>
-                <div className="flex items-start gap-2 text-xs text-amber-900 bg-amber-50 p-3 rounded-lg border border-amber-200">
-                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-                  <span>
-                    If you forget your password, your stories cannot be recovered. There is no password reset — the server cannot decrypt your data.
-                  </span>
-                </div>
-                {hasLegacyData && (
-                  <button
-                    onClick={eraseLegacyData}
-                    className="w-full flex items-start gap-2 text-xs text-red-900 bg-red-50 hover:bg-red-100 p-3 rounded-lg border border-red-200 text-left"
-                  >
-                    <ShieldAlert size={14} className="mt-0.5 shrink-0" />
-                    <span>
-                      Local data from a previous version of the app was found in this browser. Click to erase it.
-                    </span>
-                  </button>
-                )}
-              </div>
             </div>
           </div>
         </div>
@@ -618,9 +514,9 @@ Last Updated: ${new Date(story.updatedAt).toLocaleDateString()}`;
               </div>
               <div className="flex gap-2">
                 <button
-                  onClick={handleForgetMe}
+                  onClick={handleDeleteAccount}
                   className="flex items-center gap-2 px-4 py-2 bg-white text-red-700 rounded-lg border border-red-200 hover:bg-red-50 transition text-sm"
-                  title="Permanently delete your account from the server"
+                  title="Permanently delete your account"
                 >
                   <Trash2 size={18} />
                   Delete account
